@@ -2,13 +2,6 @@ const { Client, GatewayIntentBits, PermissionsBitField, EmbedBuilder, ChannelTyp
 const mongoose = require("mongoose");
 const User = require("./models/User");
 
-const config = {
-  spamLimit: 6,
-  spamInterval: 5000,
-  maxAttachmentMB: 5,
-  suspiciousDays: 3
-};
-
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -22,6 +15,40 @@ const client = new Client({
   ]
 });
 
+// ===== Configuration Default =====
+const config = {
+  spamInterval: 5000, // 5 seconds
+  spamLimit: 5, // 5 messages
+  maxAttachmentMB: 8, // 8 MB
+  suspiciousDays: 7, // 7 days
+  severity: {
+    toxic: {
+      indonesian: 4,
+      english: 3,
+      spanish: 3,
+      arabic: 4,
+      repeated: 2,
+      zalgo: 3
+    },
+    harassment: {
+      personal: 5,
+      threatening: 8,
+      doxxing: 10
+    },
+    scam: {
+      links: 6,
+      ipGrabber: 8,
+      crypto: 7,
+      nsfw: 10
+    },
+    advertising: {
+      server: 4,
+      social: 2,
+      selling: 5
+    }
+  }
+};
+
 // ===== MongoDB Connect =====
 mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log("MongoDB Connected"))
@@ -34,28 +61,28 @@ const LOG_CHANNEL_ID = '1359068998544789645'; // Channel ID untuk log
 function analyzeContent(content) {
   const patterns = {
     toxic: {
-      indonesian: /kontol|anjing|babi|ngentot|memek|goblok|bodoh|tolol|ngentod|jancok|asu|bangsat|bajingan|kampret|dongo|belegug/i,
-      english: /fuck|bitch|asshole|motherfucker|nigger|shit|damn|piss off|cunt|dickhead|bastard|wanker|twat|prick/i,
-      spanish: /puta|mierda|pendejo|cabron|verga|cojones|chingar|carajo|concha/i,
-      arabic: /كسم|شرموطة|متناك|ابن الكلب|كس امك|نيق|شرموط/i,
+      indonesian: /kontol|anjing|babi|ngentot|memek|goblok|bodoh|tolol|ngentod|jancok|asu|bangsat|bajingan|kampret|dongo|belegug|pepek|tempik|pantek| tai|ngentot|ngntd|njir|ngawi|goblok|bego|geblek|congor|monyet|kadull|kampang|jembut|kimak|pukimak|bangsad|ngentod|kontl|anjg|anj|mmk|ngnt/i,
+      english: /fuck|bitch|asshole|motherfucker|nigger|shit|damn|piss off|cunt|dickhead|bastard|wanker|twat|prick|whore|slut|retard|faggot|dumbass|jackass|dipshit|douchebag|cocksucker|pussy|asshat|asswipe/i,
+      spanish: /puta|mierda|pendejo|cabron|verga|cojones|chingar|carajo|concha|gilipollas|hijoputa|maricon|puto|coño|joder/i,
+      arabic: /كسم|شرموطة|متناك|ابن الكلب|كس امك|نيق|شرموط|كس|طيز|عاهرة|قحبة|منيوك|خول/i,
       repeated: /(.)\1{8,}/i,
       zalgo: /[̗̙̖̬̥̰̜̼͔͕̼̘̮͚̻̲̝̺̦̱̞̠̤̩̙̘̮̲̫̬̦͓]/
     },
     harassment: {
-      personal: /kamu (jelek|bodoh|goblok)|you (ugly|stupid|dumb|idiot)/i,
-      threatening: /(saya akan|gua bakal|i will|im gonna) (bunuh|kill|hajar|beat|destroy) (kamu|you)/i,
-      doxxing: /(alamat|address|rumah|house) (saya|gua|my) (di|at)|\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/
+      personal: /\bkamu (jelek|bodoh|goblok|bego|tolol|idiot)\b|\byou (are )?(ugly|stupid|dumb|idiot|retarded)\b/i,
+      threatening: /\b(saya akan|gua bakal|gue bakal|i will|im gonna|i'm gonna) (bunuh|kill|hajar|beat|destroy|habisi|mutilasi|tusuk|tembak)\b/i,
+      doxxing: /\b(alamat|address|rumah|house|tinggal di|live at) .{0,20}(jalan|jl|street|rt|rw|desa|kota|city)\b|\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/
     },
     scam: {
-      links: /bit\.ly|tinyurl|discord\.gift|discord\.com\/gifts|free nitro|steamcommunity\.com\/offer|free robux|free v-bucks|airdrop|giveaway.*(nitro|robux)|hacked account|account generator/i,
-      ipGrabber: /http:\/\/\d+\.\d+\.\d+\.\d+:\d+|\d+\.\d+\.\d+\.\d+\/grab|iplogger|grabify/i,
-      crypto: /(free|bonus) (bitcoin|ethereum|crypto)|double your (bitcoin|money)/i,
-      nsfw: /underage|teen.*(porn|sex)|loli|shota/i
+      links: /\b(bit\.ly|tinyurl|discord\.gift|discord\.com\/gifts|free nitro|steamcommunity\.com\/offer|free robux|free v-bucks|airdrop|giveaway.*(nitro|robux)|hacked account|account generator|boost your server|nitro gift)\b/i,
+      ipGrabber: /http:\/\/\d+\.\d+\.\d+\.\d+:\d+|\d+\.\d+\.\d+\.\d+\/grab|iplogger|grabify|ps3cfw|ip-tracker/i,
+      crypto: /\b(free|bonus|double|gratis) (bitcoin|ethereum|crypto|btc|eth|dogecoin)\b|\bdouble your (bitcoin|money|eth)\b/i,
+      nsfw: /\b(underage|teen.*(porn|sex)|loli|shota|cp|child porn|bocah|anak di bawah umur)\b/i
     },
     advertising: {
       server: /discord\.gg\/[a-zA-Z0-9]+|discord\.com\/invite\/[a-zA-Z0-9]+/i,
-      social: /(youtube|instagram|tiktok|twitter)\.com\/[a-zA-Z0-9_]+/i,
-      selling: /(jual|selling|beli|buying) (jasa|service|akun|account|boost|nitro)|price \$\d+/i
+      social: /\b(youtube|instagram|tiktok|twitter|facebook|snapchat)\.com\/[a-zA-Z0-9_.-]+\b/i,
+      selling: /\b(jual|selling|beli|buying|tukar|trade) (jasa|service|akun|account|boost|nitro|level|rank|joki|jocky)\b|\bprice \$\d+\b|\bharga (rp|ribu|juta)\b/i
     }
   };
 
@@ -66,24 +93,37 @@ function analyzeContent(content) {
   for (const [category, subPatterns] of Object.entries(patterns)) {
     for (const [type, pattern] of Object.entries(subPatterns)) {
       if (pattern.test(content)) {
-        score += config.severity[category]?.[type] || 2;
+        // Get severity from config or use default
+        const severityScore = config.severity[category]?.[type] || 2;
+        score += severityScore;
         reasons.push(`${category}:${type}`);
+        
+        // Log for debugging (hapus jika tidak perlu)
+        console.log(`Match found: ${category}:${type} in message: ${content.substring(0, 50)}`);
       }
     }
   }
 
   // Check for excessive caps (possible yelling/aggression)
+  const letters = content.replace(/[^A-Za-z]/g, '');
   const capsCount = (content.match(/[A-Z]/g) || []).length;
-  if (content.length > 10 && capsCount / content.length > 0.7) {
-    score += 3;
+  if (letters.length > 5 && capsCount / letters.length > 0.7) {
+    score += 2;
     reasons.push("excessive_caps");
   }
 
   // Check for mass mentions
   const mentionCount = (content.match(/<@!?&\d+>/g) || []).length;
   if (mentionCount > 3) {
-    score += mentionCount * 2;
+    score += mentionCount * 1.5;
     reasons.push("mass_mentions");
+  }
+
+  // Check for link shorteners (extra scam detection)
+  const shorteners = /bit\.ly|tinyurl|shorturl|shorte|ow\.ly|goo\.gl|is\.gd|buff\.ly|short\.link|shortened/i;
+  if (shorteners.test(content)) {
+    score += 3;
+    reasons.push("link_shortener");
   }
 
   return { score, reasons };
@@ -183,10 +223,16 @@ async function handleViolation(message, severity, reason, additionalInfo = {}) {
   const now = new Date();
 
   // Time-based multiplier decay
-  if ((now - user.lastViolation) < 48 * 60 * 60 * 1000) {
-    user.multiplier += 0.5;
-  } else if ((now - user.lastViolation) > 7 * 24 * 60 * 60 * 1000) {
-    user.multiplier = Math.max(1, user.multiplier - 0.5);
+  if (user.lastViolation) {
+    const hoursSinceLastViolation = (now - user.lastViolation) / (1000 * 60 * 60);
+    
+    if (hoursSinceLastViolation < 48) {
+      user.multiplier = (user.multiplier || 1) + 0.5;
+    } else if (hoursSinceLastViolation > 168) { // 1 week
+      user.multiplier = Math.max(1, (user.multiplier || 1) - 0.5);
+    }
+  } else {
+    user.multiplier = 1;
   }
 
   // Suspicious user multiplier
@@ -194,10 +240,16 @@ async function handleViolation(message, severity, reason, additionalInfo = {}) {
     user.multiplier *= 1.5;
   }
 
+  // Initialize points if not exists
+  if (!user.points) user.points = 0;
+  
   // Calculate points
-  const points = severity * user.multiplier;
+  const points = severity * (user.multiplier || 1);
   user.points += points;
   user.lastViolation = now;
+  
+  // Initialize offenseHistory if not exists
+  if (!user.offenseHistory) user.offenseHistory = [];
   user.offenseHistory.push({
     reason: reason,
     timestamp: now,
@@ -344,7 +396,7 @@ async function logAction(guild, data) {
         .join('\n');
       embed.addFields({ 
         name: '📋 Additional Details', 
-        value: detailsStr, 
+        value: detailsStr.substring(0, 1000), 
         inline: false 
       });
     }
@@ -381,27 +433,30 @@ client.on("messageCreate", async message => {
   // Check for dangerous permissions in invites
   if (message.content.includes("discord.gg/") || message.content.includes("discord.com/invite/")) {
     try {
-      const inviteCode = message.content.match(/(?:discord\.gg\/|discord\.com\/invite\/)([a-zA-Z0-9]+)/)[1];
-      const invite = await client.fetchInvite(inviteCode).catch(() => null);
-      
-      if (invite && invite.guild) {
-        // Check if it's a competitor server or suspicious server
-        if (invite.guild.name.toLowerCase().includes("hack") || 
-            invite.guild.name.toLowerCase().includes("cheat") ||
-            invite.guild.name.toLowerCase().includes("free nitro") ||
-            invite.memberCount > 10000) { // Large server invites might be spam
-          
-          await message.delete().catch(() => {});
-          await handleViolation(message, 6, "Suspicious Server Invite", {
-            serverName: invite.guild.name,
-            memberCount: invite.memberCount
-          });
+      const inviteMatch = message.content.match(/(?:discord\.gg\/|discord\.com\/invite\/)([a-zA-Z0-9]+)/);
+      if (inviteMatch) {
+        const inviteCode = inviteMatch[1];
+        const invite = await client.fetchInvite(inviteCode).catch(() => null);
+        
+        if (invite && invite.guild) {
+          // Check if it's a competitor server or suspicious server
+          const suspiciousNames = /hack|cheat|free nitro|boost|nuke|raid|spam|cp|child|underage/i;
+          if (suspiciousNames.test(invite.guild.name) || invite.memberCount > 10000) {
+            
+            await message.delete().catch(() => {});
+            await handleViolation(message, 6, "Suspicious Server Invite", {
+              serverName: invite.guild.name.substring(0, 50),
+              memberCount: invite.memberCount
+            });
+            return;
+          }
         }
       }
     } catch (error) {
       // Invalid invite, delete it
       await message.delete().catch(() => {});
       await handleViolation(message, 4, "Invalid/Unknown Invite");
+      return;
     }
   }
 
@@ -425,7 +480,7 @@ client.on("messageCreate", async message => {
   if (spamResult.score > 0) {
     await message.delete().catch(() => {});
     await handleViolation(message, spamResult.score, "Spam Detection", {
-      patterns: spamResult.reasons
+      patterns: spamResult.reasons.join(', ')
     });
     return;
   }
@@ -435,7 +490,7 @@ client.on("messageCreate", async message => {
   if (contentAnalysis.score > 0) {
     await message.delete().catch(() => {});
     await handleViolation(message, contentAnalysis.score, "Content Violation", {
-      patterns: contentAnalysis.reasons
+      patterns: contentAnalysis.reasons.join(', ')
     });
     return;
   }
@@ -454,7 +509,7 @@ client.on("messageCreate", async message => {
       }
 
       // Check file type
-      const dangerousExtensions = ['.exe', '.msi', '.bat', '.cmd', '.sh', '.jar', '.vbs', '.ps1'];
+      const dangerousExtensions = ['.exe', '.msi', '.bat', '.cmd', '.sh', '.jar', '.vbs', '.ps1', '.scr', '.dll', '.js', '.wsf'];
       const fileExt = attachment.name.substring(attachment.name.lastIndexOf('.')).toLowerCase();
       if (dangerousExtensions.includes(fileExt)) {
         await message.delete().catch(() => {});
@@ -470,7 +525,7 @@ client.on("messageCreate", async message => {
   // ===== Message Update Tracking =====
   if (!user.lastMessages) user.lastMessages = [];
   user.lastMessages.push({
-    content: message.content,
+    content: message.content.substring(0, 100),
     timestamp: now,
     messageId: message.id
   });
@@ -481,7 +536,7 @@ client.on("messageCreate", async message => {
 
 // ===== Message Update Event (for edited messages) =====
 client.on("messageUpdate", async (oldMessage, newMessage) => {
-  if (!newMessage.guild || newMessage.author.bot) return;
+  if (!newMessage.guild || newMessage.author?.bot) return;
   if (oldMessage.content === newMessage.content) return;
 
   // Check edited message for violations
@@ -489,8 +544,8 @@ client.on("messageUpdate", async (oldMessage, newMessage) => {
   if (contentAnalysis.score > 0) {
     await newMessage.delete().catch(() => {});
     await handleViolation(newMessage, contentAnalysis.score, "Edited Message Violation", {
-      oldContent: oldMessage.content?.substring(0, 100),
-      patterns: contentAnalysis.reasons
+      oldContent: oldMessage.content?.substring(0, 100) || 'No old content',
+      patterns: contentAnalysis.reasons.join(', ')
     });
   }
 });
@@ -529,7 +584,8 @@ client.on("guildMemberAdd", async member => {
   }
 
   if (username.includes("discord") || username.includes("moderator") || 
-      username.includes("admin") || username.includes("security")) {
+      username.includes("admin") || username.includes("security") ||
+      username.includes("staff") || username.includes("helper")) {
     suspicious = true;
     reasons.push("Impersonation attempt");
   }
@@ -557,7 +613,7 @@ client.on("guildMemberAdd", async member => {
     });
 
     // Auto-kick if extremely suspicious
-    if (daysOld < 0.1 || username.match(/bot|spam|hack/i)) { // Less than 2.4 hours old
+    if (daysOld < 0.1 || username.match(/bot|spam|hack|nuke|raid/i)) { // Less than 2.4 hours old
       await member.kick("Guardian: Extremely suspicious account").catch(() => {});
       await logAction(member.guild, {
         type: 'KICK',
@@ -632,24 +688,8 @@ setInterval(async () => {
   }
 }, 24 * 60 * 60 * 1000); // Run daily
 
-// ===== Command Handler for Log Channel =====
-client.on("messageCreate", async message => {
-  if (message.author.bot) return;
-  if (!message.member?.permissions.has(PermissionsBitField.Flags.Administrator)) return;
-
-  if (message.content.startsWith("!setlog")) {
-    const channel = message.mentions.channels.first();
-    if (!channel || channel.type !== ChannelType.GuildText) {
-      return message.reply("Please mention a valid text channel!");
-    }
-
-    // Update the log channel ID (you might want to store this in config/database)
-    // For now, we'll just reply
-    await message.reply(`✅ Log channel set to ${channel}`);
-  }
-});
-
-client.once("ready", () => {
+// ===== Ready Event =====
+client.once('ready', () => {
   console.log(`Logged in as ${client.user.tag}`);
 });
 
