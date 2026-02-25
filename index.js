@@ -1,7 +1,13 @@
 const { Client, GatewayIntentBits, PermissionsBitField, EmbedBuilder, ChannelType } = require("discord.js");
 const mongoose = require("mongoose");
-const config = require("./config");
 const User = require("./models/User");
+
+const config = {
+  spamLimit: 6,
+  spamInterval: 5000,
+  maxAttachmentMB: 5,
+  suspiciousDays: 3
+};
 
 const client = new Client({
   intents: [
