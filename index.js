@@ -61,7 +61,7 @@ const LOG_CHANNEL_ID = '1359068998544789645'; // Channel ID untuk log
 function analyzeContent(content) {
   const patterns = {
     toxic: {
-      indonesian: /kontol|anjing|babi|ngentot|memek|goblok|bodoh|tolol|ngentod|jancok|asu|bangsat|bajingan|kampret|dongo|belegug|pepek|tempik|pantek| tai|ngentot|ngntd|njir|ngawi|goblok|bego|geblek|congor|monyet|kadull|kampang|jembut|kimak|pukimak|bangsad|ngentod|kontl|anjg|anj|mmk|ngnt/i,
+      indonesian: /kontol|anjing|babi|ngentot|memek|goblok|bodoh|tolol|ngentod|jancok|asu|bangsat|bajingan|kampret|dongo|belegug|pepek|tempik|pantek|tai|ngentot|ngntd|njir|ngawi|goblok|bego|geblek|congor|monyet|kadull|kampang|jembut|kimak|pukimak|bangsad|ngentod|kontl|anjg|anj|mmk|ngnt/i,
       english: /fuck|bitch|asshole|motherfucker|nigger|shit|damn|piss off|cunt|dickhead|bastard|wanker|twat|prick|whore|slut|retard|faggot|dumbass|jackass|dipshit|douchebag|cocksucker|pussy|asshat|asswipe/i,
       spanish: /puta|mierda|pendejo|cabron|verga|cojones|chingar|carajo|concha|gilipollas|hijoputa|maricon|puto|coño|joder/i,
       arabic: /كسم|شرموطة|متناك|ابن الكلب|كس امك|نيق|شرموط|كس|طيز|عاهرة|قحبة|منيوك|خول/i,
@@ -97,9 +97,6 @@ function analyzeContent(content) {
         const severityScore = config.severity[category]?.[type] || 2;
         score += severityScore;
         reasons.push(`${category}:${type}`);
-        
-        // Log for debugging (hapus jika tidak perlu)
-        console.log(`Match found: ${category}:${type} in message: ${content.substring(0, 50)}`);
       }
     }
   }
@@ -208,70 +205,78 @@ const spamDetector = new SpamDetector();
 async function handleViolation(message, severity, reason, additionalInfo = {}) {
   if (!message.member) return;
 
-  let user = await User.findOne({
-    userId: message.author.id,
-    guildId: message.guild.id
-  });
-
-  if (!user) {
-    user = new User({
+  try {
+    let user = await User.findOne({
       userId: message.author.id,
       guildId: message.guild.id
     });
-  }
 
-  const now = new Date();
-
-  // Time-based multiplier decay
-  if (user.lastViolation) {
-    const hoursSinceLastViolation = (now - user.lastViolation) / (1000 * 60 * 60);
-    
-    if (hoursSinceLastViolation < 48) {
-      user.multiplier = (user.multiplier || 1) + 0.5;
-    } else if (hoursSinceLastViolation > 168) { // 1 week
-      user.multiplier = Math.max(1, (user.multiplier || 1) - 0.5);
+    if (!user) {
+      user = new User({
+        userId: message.author.id,
+        guildId: message.guild.id
+      });
     }
-  } else {
-    user.multiplier = 1;
+
+    const now = new Date();
+
+    // Time-based multiplier decay
+    if (user.lastViolation) {
+      const hoursSinceLastViolation = (now - user.lastViolation) / (1000 * 60 * 60);
+      
+      if (hoursSinceLastViolation < 48) {
+        user.multiplier = (user.multiplier || 1) + 0.5;
+      } else if (hoursSinceLastViolation > 168) { // 1 week
+        user.multiplier = Math.max(1, (user.multiplier || 1) - 0.5);
+      }
+    } else {
+      user.multiplier = 1;
+    }
+
+    // Suspicious user multiplier
+    if (user.suspicious) {
+      user.multiplier *= 1.5;
+    }
+
+    // Initialize points if not exists
+    if (!user.points) user.points = 0;
+    
+    // Calculate points
+    const points = severity * (user.multiplier || 1);
+    user.points += points;
+    user.lastViolation = now;
+    
+    // Initialize offenseHistory if not exists
+    if (!user.offenseHistory) user.offenseHistory = [];
+    
+    // Push new offense as an object (not string)
+    user.offenseHistory.push({
+      reason: reason,
+      timestamp: now,
+      severity: severity,
+      points: points
+    });
+
+    // Save with validation disabled temporarily if needed
+    await user.save();
+
+    // Log the violation
+    await logAction(message.guild, {
+      type: 'WARNING',
+      user: message.author,
+      moderator: client.user,
+      reason: reason,
+      details: additionalInfo,
+      points: points,
+      totalPoints: user.points
+    });
+
+    // Apply punishment
+    await punish(message.member, user.points, reason);
+    
+  } catch (error) {
+    console.error('Error in handleViolation:', error);
   }
-
-  // Suspicious user multiplier
-  if (user.suspicious) {
-    user.multiplier *= 1.5;
-  }
-
-  // Initialize points if not exists
-  if (!user.points) user.points = 0;
-  
-  // Calculate points
-  const points = severity * (user.multiplier || 1);
-  user.points += points;
-  user.lastViolation = now;
-  
-  // Initialize offenseHistory if not exists
-  if (!user.offenseHistory) user.offenseHistory = [];
-  user.offenseHistory.push({
-    reason: reason,
-    timestamp: now,
-    severity: severity,
-    points: points
-  });
-
-  await user.save();
-
-  // Log the violation
-  await logAction(message.guild, {
-    type: 'WARNING',
-    user: message.author,
-    moderator: client.user,
-    reason: reason,
-    details: additionalInfo,
-    points: points,
-    totalPoints: user.points
-  });
-
-  // Apply punishment
-  await punish(message.member, user.points, reason);
 }
 
 // ===== Enhanced Punishment System =====
@@ -281,49 +286,53 @@ async function punish(member, points, lastReason) {
   let action = null;
   let duration = null;
 
-  if (points >= 100) {
-    await member.ban({ reason: `Guardian: Permanent Ban - ${lastReason}` });
-    action = 'PERMANENT_BAN';
-  } else if (points >= 75) {
-    await member.ban({ reason: `Guardian: 6 Month Ban - ${lastReason}` });
-    action = 'SIX_MONTH_BAN';
-  } else if (points >= 50) {
-    await member.ban({ reason: `Guardian: 1 Month Ban - ${lastReason}` });
-    action = 'ONE_MONTH_BAN';
-  } else if (points >= 35) {
-    await member.ban({ reason: `Guardian: 1 Week Ban - ${lastReason}` });
-    action = 'ONE_WEEK_BAN';
-  } else if (points >= 25) {
-    await member.timeout(14 * 24 * 60 * 60 * 1000, `Guardian: 2 Week Timeout - ${lastReason}`);
-    action = 'TWO_WEEK_TIMEOUT';
-    duration = '14 days';
-  } else if (points >= 20) {
-    await member.timeout(7 * 24 * 60 * 60 * 1000, `Guardian: 1 Week Timeout - ${lastReason}`);
-    action = 'ONE_WEEK_TIMEOUT';
-    duration = '7 days';
-  } else if (points >= 15) {
-    await member.timeout(3 * 24 * 60 * 60 * 1000, `Guardian: 3 Day Timeout - ${lastReason}`);
-    action = 'THREE_DAY_TIMEOUT';
-    duration = '3 days';
-  } else if (points >= 10) {
-    await member.timeout(24 * 60 * 60 * 1000, `Guardian: 24 Hour Timeout - ${lastReason}`);
-    action = 'DAY_TIMEOUT';
-    duration = '24 hours';
-  } else if (points >= 5) {
-    await member.timeout(60 * 60 * 1000, `Guardian: 1 Hour Timeout - ${lastReason}`);
-    action = 'HOUR_TIMEOUT';
-    duration = '1 hour';
-  }
+  try {
+    if (points >= 100) {
+      await member.ban({ reason: `Guardian: Permanent Ban - ${lastReason}` });
+      action = 'PERMANENT_BAN';
+    } else if (points >= 75) {
+      await member.ban({ reason: `Guardian: 6 Month Ban - ${lastReason}` });
+      action = 'SIX_MONTH_BAN';
+    } else if (points >= 50) {
+      await member.ban({ reason: `Guardian: 1 Month Ban - ${lastReason}` });
+      action = 'ONE_MONTH_BAN';
+    } else if (points >= 35) {
+      await member.ban({ reason: `Guardian: 1 Week Ban - ${lastReason}` });
+      action = 'ONE_WEEK_BAN';
+    } else if (points >= 25) {
+      await member.timeout(14 * 24 * 60 * 60 * 1000, `Guardian: 2 Week Timeout - ${lastReason}`);
+      action = 'TWO_WEEK_TIMEOUT';
+      duration = '14 days';
+    } else if (points >= 20) {
+      await member.timeout(7 * 24 * 60 * 60 * 1000, `Guardian: 1 Week Timeout - ${lastReason}`);
+      action = 'ONE_WEEK_TIMEOUT';
+      duration = '7 days';
+    } else if (points >= 15) {
+      await member.timeout(3 * 24 * 60 * 60 * 1000, `Guardian: 3 Day Timeout - ${lastReason}`);
+      action = 'THREE_DAY_TIMEOUT';
+      duration = '3 days';
+    } else if (points >= 10) {
+      await member.timeout(24 * 60 * 60 * 1000, `Guardian: 24 Hour Timeout - ${lastReason}`);
+      action = 'DAY_TIMEOUT';
+      duration = '24 hours';
+    } else if (points >= 5) {
+      await member.timeout(60 * 60 * 1000, `Guardian: 1 Hour Timeout - ${lastReason}`);
+      action = 'HOUR_TIMEOUT';
+      duration = '1 hour';
+    }
 
-  if (action) {
-    await logAction(member.guild, {
-      type: action,
-      user: member.user,
-      moderator: client.user,
-      reason: lastReason,
-      duration: duration,
-      points: points
-    });
+    if (action) {
+      await logAction(member.guild, {
+        type: action,
+        user: member.user,
+        moderator: client.user,
+        reason: lastReason,
+        duration: duration,
+        points: points
+      });
+    }
+  } catch (error) {
+    console.error('Error in punish:', error);
   }
 }
 
@@ -430,108 +439,126 @@ client.on("messageCreate", async message => {
   if (message.author.bot) return;
   if (!message.guild) return;
 
-  // Check for dangerous permissions in invites
-  if (message.content.includes("discord.gg/") || message.content.includes("discord.com/invite/")) {
-    try {
-      const inviteMatch = message.content.match(/(?:discord\.gg\/|discord\.com\/invite\/)([a-zA-Z0-9]+)/);
-      if (inviteMatch) {
-        const inviteCode = inviteMatch[1];
-        const invite = await client.fetchInvite(inviteCode).catch(() => null);
-        
-        if (invite && invite.guild) {
-          // Check if it's a competitor server or suspicious server
-          const suspiciousNames = /hack|cheat|free nitro|boost|nuke|raid|spam|cp|child|underage/i;
-          if (suspiciousNames.test(invite.guild.name) || invite.memberCount > 10000) {
-            
-            await message.delete().catch(() => {});
-            await handleViolation(message, 6, "Suspicious Server Invite", {
-              serverName: invite.guild.name.substring(0, 50),
-              memberCount: invite.memberCount
-            });
-            return;
+  try {
+    // Check for dangerous permissions in invites
+    if (message.content.includes("discord.gg/") || message.content.includes("discord.com/invite/")) {
+      try {
+        const inviteMatch = message.content.match(/(?:discord\.gg\/|discord\.com\/invite\/)([a-zA-Z0-9]+)/);
+        if (inviteMatch) {
+          const inviteCode = inviteMatch[1];
+          const invite = await client.fetchInvite(inviteCode).catch(() => null);
+          
+          if (invite && invite.guild) {
+            // Check if it's a competitor server or suspicious server
+            const suspiciousNames = /hack|cheat|free nitro|boost|nuke|raid|spam|cp|child|underage/i;
+            if (suspiciousNames.test(invite.guild.name) || invite.memberCount > 10000) {
+              
+              await message.delete().catch(() => {});
+              await handleViolation(message, 6, "Suspicious Server Invite", {
+                serverName: invite.guild.name.substring(0, 50),
+                memberCount: invite.memberCount
+              });
+              return;
+            }
           }
         }
+      } catch (error) {
+        // Invalid invite, delete it
+        await message.delete().catch(() => {});
+        await handleViolation(message, 4, "Invalid/Unknown Invite");
+        return;
       }
-    } catch (error) {
-      // Invalid invite, delete it
-      await message.delete().catch(() => {});
-      await handleViolation(message, 4, "Invalid/Unknown Invite");
-      return;
     }
-  }
 
-  // Get user data
-  let user = await User.findOne({
-    userId: message.author.id,
-    guildId: message.guild.id
-  });
-
-  if (!user) {
-    user = new User({
+    // Get user data
+    let user = await User.findOne({
       userId: message.author.id,
       guildId: message.guild.id
     });
-  }
 
-  const now = Date.now();
+    if (!user) {
+      user = new User({
+        userId: message.author.id,
+        guildId: message.guild.id
+      });
+    }
 
-  // ===== Advanced Spam Detection =====
-  const spamResult = spamDetector.checkSpam(message);
-  if (spamResult.score > 0) {
-    await message.delete().catch(() => {});
-    await handleViolation(message, spamResult.score, "Spam Detection", {
-      patterns: spamResult.reasons.join(', ')
-    });
-    return;
-  }
+    const now = Date.now();
 
-  // ===== Content Analysis =====
-  const contentAnalysis = analyzeContent(message.content);
-  if (contentAnalysis.score > 0) {
-    await message.delete().catch(() => {});
-    await handleViolation(message, contentAnalysis.score, "Content Violation", {
-      patterns: contentAnalysis.reasons.join(', ')
-    });
-    return;
-  }
+    // Update message timestamps for spam detection
+    if (!user.messageTimestamps) user.messageTimestamps = [];
+    user.messageTimestamps.push(now);
+    user.messageTimestamps = user.messageTimestamps.filter(
+      t => now - t < config.spamInterval
+    );
 
-  // ===== Attachment Analysis =====
-  if (message.attachments.size > 0) {
-    for (const attachment of message.attachments.values()) {
-      // Check file size
-      if (attachment.size > config.maxAttachmentMB * 1024 * 1024) {
-        await message.delete().catch(() => {});
-        await handleViolation(message, 4, "Large Attachment", {
-          fileName: attachment.name,
-          sizeMB: (attachment.size / (1024 * 1024)).toFixed(2)
-        });
-        return;
-      }
+    // Check for spam using both methods
+    if (user.messageTimestamps.length >= config.spamLimit) {
+      await message.delete().catch(() => {});
+      await handleViolation(message, 3, "Spam");
+      return;
+    }
 
-      // Check file type
-      const dangerousExtensions = ['.exe', '.msi', '.bat', '.cmd', '.sh', '.jar', '.vbs', '.ps1', '.scr', '.dll', '.js', '.wsf'];
-      const fileExt = attachment.name.substring(attachment.name.lastIndexOf('.')).toLowerCase();
-      if (dangerousExtensions.includes(fileExt)) {
-        await message.delete().catch(() => {});
-        await handleViolation(message, 8, "Dangerous File Type", {
-          fileName: attachment.name,
-          fileType: fileExt
-        });
-        return;
+    // ===== Advanced Spam Detection =====
+    const spamResult = spamDetector.checkSpam(message);
+    if (spamResult.score > 0) {
+      await message.delete().catch(() => {});
+      await handleViolation(message, spamResult.score, "Spam Detection", {
+        patterns: spamResult.reasons.join(', ')
+      });
+      return;
+    }
+
+    // ===== Content Analysis =====
+    const contentAnalysis = analyzeContent(message.content);
+    if (contentAnalysis.score > 0) {
+      await message.delete().catch(() => {});
+      await handleViolation(message, contentAnalysis.score, "Content Violation", {
+        patterns: contentAnalysis.reasons.join(', ')
+      });
+      return;
+    }
+
+    // ===== Attachment Analysis =====
+    if (message.attachments.size > 0) {
+      for (const attachment of message.attachments.values()) {
+        // Check file size
+        if (attachment.size > config.maxAttachmentMB * 1024 * 1024) {
+          await message.delete().catch(() => {});
+          await handleViolation(message, 4, "Large Attachment", {
+            fileName: attachment.name,
+            sizeMB: (attachment.size / (1024 * 1024)).toFixed(2)
+          });
+          return;
+        }
+
+        // Check file type
+        const dangerousExtensions = ['.exe', '.msi', '.bat', '.cmd', '.sh', '.jar', '.vbs', '.ps1', '.scr', '.dll', '.js', '.wsf'];
+        const fileExt = attachment.name.substring(attachment.name.lastIndexOf('.')).toLowerCase();
+        if (dangerousExtensions.includes(fileExt)) {
+          await message.delete().catch(() => {});
+          await handleViolation(message, 8, "Dangerous File Type", {
+            fileName: attachment.name,
+            fileType: fileExt
+          });
+          return;
+        }
       }
     }
+
+    // ===== Message Update Tracking =====
+    if (!user.lastMessages) user.lastMessages = [];
+    user.lastMessages.push({
+      content: message.content.substring(0, 100),
+      timestamp: now,
+      messageId: message.id
+    });
+    user.lastMessages = user.lastMessages.slice(-10); // Keep last 10 messages
+
+    await user.save();
+  } catch (error) {
+    console.error('Error in messageCreate:', error);
   }
-
-  // ===== Message Update Tracking =====
-  if (!user.lastMessages) user.lastMessages = [];
-  user.lastMessages.push({
-    content: message.content.substring(0, 100),
-    timestamp: now,
-    messageId: message.id
-  });
-  user.lastMessages = user.lastMessages.slice(-10); // Keep last 10 messages
-
-  await user.save();
 });
 
 // ===== Message Update Event (for edited messages) =====
@@ -539,93 +566,101 @@ client.on("messageUpdate", async (oldMessage, newMessage) => {
   if (!newMessage.guild || newMessage.author?.bot) return;
   if (oldMessage.content === newMessage.content) return;
 
-  // Check edited message for violations
-  const contentAnalysis = analyzeContent(newMessage.content);
-  if (contentAnalysis.score > 0) {
-    await newMessage.delete().catch(() => {});
-    await handleViolation(newMessage, contentAnalysis.score, "Edited Message Violation", {
-      oldContent: oldMessage.content?.substring(0, 100) || 'No old content',
-      patterns: contentAnalysis.reasons.join(', ')
-    });
+  try {
+    // Check edited message for violations
+    const contentAnalysis = analyzeContent(newMessage.content);
+    if (contentAnalysis.score > 0) {
+      await newMessage.delete().catch(() => {});
+      await handleViolation(newMessage, contentAnalysis.score, "Edited Message Violation", {
+        oldContent: oldMessage.content?.substring(0, 100) || 'No old content',
+        patterns: contentAnalysis.reasons.join(', ')
+      });
+    }
+  } catch (error) {
+    console.error('Error in messageUpdate:', error);
   }
 });
 
 // ===== Member Join Security =====
 client.on("guildMemberAdd", async member => {
-  const accountAge = Date.now() - member.user.createdTimestamp;
-  const daysOld = accountAge / (1000 * 60 * 60 * 24);
+  try {
+    const accountAge = Date.now() - member.user.createdTimestamp;
+    const daysOld = accountAge / (1000 * 60 * 60 * 24);
 
-  let suspicious = false;
-  let reasons = [];
+    let suspicious = false;
+    let reasons = [];
 
-  // Check account age
-  if (daysOld < config.suspiciousDays) {
-    suspicious = true;
-    reasons.push(`Account too new (${daysOld.toFixed(1)} days old)`);
-  }
+    // Check account age
+    if (daysOld < config.suspiciousDays) {
+      suspicious = true;
+      reasons.push(`Account too new (${daysOld.toFixed(1)} days old)`);
+    }
 
-  // Check if account was created recently (last 24 hours)
-  if (daysOld < 1) {
-    suspicious = true;
-    reasons.push("Account created within last 24 hours");
-  }
+    // Check if account was created recently (last 24 hours)
+    if (daysOld < 1) {
+      suspicious = true;
+      reasons.push("Account created within last 24 hours");
+    }
 
-  // Check for default avatar (often bots or throwaway accounts)
-  if (member.user.avatar === null) {
-    suspicious = true;
-    reasons.push("Default avatar");
-  }
+    // Check for default avatar (often bots or throwaway accounts)
+    if (member.user.avatar === null) {
+      suspicious = true;
+      reasons.push("Default avatar");
+    }
 
-  // Check username for suspicious patterns
-  const username = member.user.username.toLowerCase();
-  if (username.match(/^[a-zA-Z0-9]+\d{4,}$/)) { // Random letters + numbers
-    suspicious = true;
-    reasons.push("Suspicious username pattern");
-  }
+    // Check username for suspicious patterns
+    const username = member.user.username.toLowerCase();
+    if (username.match(/^[a-zA-Z0-9]+\d{4,}$/)) { // Random letters + numbers
+      suspicious = true;
+      reasons.push("Suspicious username pattern");
+    }
 
-  if (username.includes("discord") || username.includes("moderator") || 
-      username.includes("admin") || username.includes("security") ||
-      username.includes("staff") || username.includes("helper")) {
-    suspicious = true;
-    reasons.push("Impersonation attempt");
-  }
+    if (username.includes("discord") || username.includes("moderator") || 
+        username.includes("admin") || username.includes("security") ||
+        username.includes("staff") || username.includes("helper")) {
+      suspicious = true;
+      reasons.push("Impersonation attempt");
+    }
 
-  if (suspicious) {
-    await User.findOneAndUpdate(
-      { userId: member.id, guildId: member.guild.id },
-      { 
-        suspicious: true,
-        suspiciousReasons: reasons,
-        joinDate: new Date()
-      },
-      { upsert: true }
-    );
+    if (suspicious) {
+      await User.findOneAndUpdate(
+        { userId: member.id, guildId: member.guild.id },
+        { 
+          suspicious: true,
+          suspiciousReasons: reasons,
+          joinDate: new Date()
+        },
+        { upsert: true }
+      );
 
-    await logAction(member.guild, {
-      type: 'WARNING',
-      user: member.user,
-      moderator: client.user,
-      reason: 'Suspicious Account Detected',
-      details: {
-        accountAge: `${daysOld.toFixed(1)} days`,
-        reasons: reasons.join(', ')
-      }
-    });
-
-    // Auto-kick if extremely suspicious
-    if (daysOld < 0.1 || username.match(/bot|spam|hack|nuke|raid/i)) { // Less than 2.4 hours old
-      await member.kick("Guardian: Extremely suspicious account").catch(() => {});
       await logAction(member.guild, {
-        type: 'KICK',
+        type: 'WARNING',
         user: member.user,
         moderator: client.user,
-        reason: 'Extremely suspicious account (automatic protection)',
+        reason: 'Suspicious Account Detected',
         details: {
           accountAge: `${daysOld.toFixed(1)} days`,
           reasons: reasons.join(', ')
         }
       });
+
+      // Auto-kick if extremely suspicious
+      if (daysOld < 0.1 || username.match(/bot|spam|hack|nuke|raid/i)) { // Less than 2.4 hours old
+        await member.kick("Guardian: Extremely suspicious account").catch(() => {});
+        await logAction(member.guild, {
+          type: 'KICK',
+          user: member.user,
+          moderator: client.user,
+          reason: 'Extremely suspicious account (automatic protection)',
+          details: {
+            accountAge: `${daysOld.toFixed(1)} days`,
+            reasons: reasons.join(', ')
+          }
+        });
+      }
     }
+  } catch (error) {
+    console.error('Error in guildMemberAdd:', error);
   }
 });
 
@@ -633,35 +668,39 @@ client.on("guildMemberAdd", async member => {
 client.on("voiceStateUpdate", async (oldState, newState) => {
   if (!newState.guild) return;
 
-  const member = newState.member;
-  if (!member) return;
+  try {
+    const member = newState.member;
+    if (!member) return;
 
-  // Check for voice channel raids
-  if (newState.channelId && !oldState.channelId) {
-    // User joined a voice channel
-    const voiceStates = newState.guild.channels.cache.get(newState.channelId)?.members.size || 0;
-    
-    if (voiceStates > 25) { // Large voice channel
-      const user = await User.findOne({
-        userId: member.id,
-        guildId: newState.guild.id
-      });
-
-      if (user && user.suspicious) {
-        // Disconnect suspicious users from large voice channels
-        await newState.disconnect("Guardian: Voice channel protection").catch(() => {});
-        await logAction(newState.guild, {
-          type: 'WARNING',
-          user: member.user,
-          moderator: client.user,
-          reason: 'Voice channel protection - Suspicious user in large voice channel',
-          details: {
-            channel: newState.channelId,
-            userCount: voiceStates
-          }
+    // Check for voice channel raids
+    if (newState.channelId && !oldState.channelId) {
+      // User joined a voice channel
+      const voiceStates = newState.guild.channels.cache.get(newState.channelId)?.members.size || 0;
+      
+      if (voiceStates > 25) { // Large voice channel
+        const user = await User.findOne({
+          userId: member.id,
+          guildId: newState.guild.id
         });
+
+        if (user && user.suspicious) {
+          // Disconnect suspicious users from large voice channels
+          await newState.disconnect("Guardian: Voice channel protection").catch(() => {});
+          await logAction(newState.guild, {
+            type: 'WARNING',
+            user: member.user,
+            moderator: client.user,
+            reason: 'Voice channel protection - Suspicious user in large voice channel',
+            details: {
+              channel: newState.channelId,
+              userCount: voiceStates
+            }
+          });
+        }
       }
     }
+  } catch (error) {
+    console.error('Error in voiceStateUpdate:', error);
   }
 });
 
@@ -691,6 +730,11 @@ setInterval(async () => {
 // ===== Ready Event =====
 client.once('ready', () => {
   console.log(`Logged in as ${client.user.tag}`);
+});
+
+// ===== Error Handling =====
+process.on('unhandledRejection', error => {
+  console.error('Unhandled promise rejection:', error);
 });
 
 client.login(process.env.TOKEN);
