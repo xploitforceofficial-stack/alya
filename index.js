@@ -54,28 +54,23 @@ mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log("MongoDB Connected"))
   .catch(err => console.log(err));
 
-// ===== Log Channel Configuration =====
-const LOG_CHANNEL_ID = '1359068998544789645'; // Channel ID untuk log
+// ===== Log Channels Configuration =====
+const LOG_CHANNELS = [
+  '1359068998544789645', // Channel pertama
+  '1476194056026456166'  // Channel kedua yang baru ditambahkan
+];
 
-// ===== Check Bot Permissions =====
-function checkBotPermissions(member) {
-  if (!member.guild.members.me) return false;
-  
-  const botMember = member.guild.members.me;
-  const requiredPermissions = [
-    PermissionsBitField.Flags.ModerateMembers, // Timeout
-    PermissionsBitField.Flags.BanMembers,      // Ban
-    PermissionsBitField.Flags.KickMembers,      // Kick
-    PermissionsBitField.Flags.ManageMessages    // Delete messages
-  ];
-  
-  const missingPermissions = requiredPermissions.filter(
-    perm => !botMember.permissions.has(perm)
-  );
+// ===== Check if bot can moderate in this server =====
+function canModerate(guild) {
+  const botMember = guild.members.me;
+  if (!botMember) return false;
   
   return {
-    hasPermissions: missingPermissions.length === 0,
-    missingPermissions: missingPermissions
+    canKick: botMember.permissions.has(PermissionsBitField.Flags.KickMembers),
+    canBan: botMember.permissions.has(PermissionsBitField.Flags.BanMembers),
+    canTimeout: botMember.permissions.has(PermissionsBitField.Flags.ModerateMembers),
+    canDeleteMessages: botMember.permissions.has(PermissionsBitField.Flags.ManageMessages),
+    isAdmin: botMember.permissions.has(PermissionsBitField.Flags.Administrator)
   };
 }
 
@@ -268,7 +263,8 @@ async function handleViolation(message, severity, reason, additionalInfo = {}) {
 
     await user.save();
 
-    await logAction(message.guild, {
+    // Log ke semua channel yang terdaftar
+    await logToAllChannels(message.guild, {
       type: 'WARNING',
       user: message.author,
       moderator: client.user,
@@ -279,105 +275,78 @@ async function handleViolation(message, severity, reason, additionalInfo = {}) {
     });
 
     // Check permissions before punishing
-    const permCheck = checkBotPermissions(message.member);
-    if (!permCheck.hasPermissions) {
-      await logAction(message.guild, {
-        type: 'WARNING',
-        user: client.user,
-        moderator: client.user,
-        reason: 'Missing Permissions',
-        details: {
-          missingPermissions: permCheck.missingPermissions.map(p => p.toString()).join(', '),
-          action: 'Cannot punish user'
-        }
-      });
-      return;
-    }
-
-    await punish(message.member, user.points, reason);
+    const perms = canModerate(message.guild);
+    
+    // Apply punishment if possible
+    await punish(message.member, user.points, reason, perms);
     
   } catch (error) {
     console.error('Error in handleViolation:', error);
   }
 }
 
-// ===== Enhanced Punishment System with better error handling =====
-async function punish(member, points, lastReason) {
+// ===== Enhanced Punishment System =====
+async function punish(member, points, lastReason, perms) {
   if (!member) return;
 
-  let action = null;
-  let duration = null;
+  // Check if we can moderate this member
+  if (!member.moderatable) {
+    await logToAllChannels(member.guild, {
+      type: 'WARNING',
+      user: member.user,
+      moderator: client.user,
+      reason: 'Cannot punish - User has higher role than bot',
+      details: {
+        points: points,
+        attemptedAction: getActionFromPoints(points)
+      }
+    });
+    return;
+  }
 
   try {
-    // Check if member is moderatable
-    if (!member.moderatable) {
-      await logAction(member.guild, {
-        type: 'WARNING',
-        user: member.user,
-        moderator: client.user,
-        reason: 'Cannot punish - User has higher permissions than bot',
-        details: {
-          points: points,
-          attemptedAction: getActionFromPoints(points)
-        }
-      });
-      return;
-    }
+    let action = null;
+    let duration = null;
 
-    if (points >= 100) {
-      if (member.bannable) {
-        await member.ban({ reason: `Guardian: Permanent Ban - ${lastReason}` });
-        action = 'PERMANENT_BAN';
-      }
-    } else if (points >= 75) {
-      if (member.bannable) {
-        await member.ban({ reason: `Guardian: 6 Month Ban - ${lastReason}` });
-        action = 'SIX_MONTH_BAN';
-      }
-    } else if (points >= 50) {
-      if (member.bannable) {
-        await member.ban({ reason: `Guardian: 1 Month Ban - ${lastReason}` });
-        action = 'ONE_MONTH_BAN';
-      }
-    } else if (points >= 35) {
-      if (member.bannable) {
-        await member.ban({ reason: `Guardian: 1 Week Ban - ${lastReason}` });
-        action = 'ONE_WEEK_BAN';
-      }
-    } else if (points >= 25) {
-      if (member.moderatable) {
-        await member.timeout(14 * 24 * 60 * 60 * 1000, `Guardian: 2 Week Timeout - ${lastReason}`);
-        action = 'TWO_WEEK_TIMEOUT';
-        duration = '14 days';
-      }
-    } else if (points >= 20) {
-      if (member.moderatable) {
-        await member.timeout(7 * 24 * 60 * 60 * 1000, `Guardian: 1 Week Timeout - ${lastReason}`);
-        action = 'ONE_WEEK_TIMEOUT';
-        duration = '7 days';
-      }
-    } else if (points >= 15) {
-      if (member.moderatable) {
-        await member.timeout(3 * 24 * 60 * 60 * 1000, `Guardian: 3 Day Timeout - ${lastReason}`);
-        action = 'THREE_DAY_TIMEOUT';
-        duration = '3 days';
-      }
-    } else if (points >= 10) {
-      if (member.moderatable) {
-        await member.timeout(24 * 60 * 60 * 1000, `Guardian: 24 Hour Timeout - ${lastReason}`);
-        action = 'DAY_TIMEOUT';
-        duration = '24 hours';
-      }
-    } else if (points >= 5) {
-      if (member.moderatable) {
-        await member.timeout(60 * 60 * 1000, `Guardian: 1 Hour Timeout - ${lastReason}`);
-        action = 'HOUR_TIMEOUT';
-        duration = '1 hour';
-      }
+    // Ban actions - require ban permission
+    if (points >= 100 && perms.canBan) {
+      await member.ban({ reason: `Guardian: Permanent Ban - ${lastReason}` });
+      action = 'PERMANENT_BAN';
+    } else if (points >= 75 && perms.canBan) {
+      await member.ban({ reason: `Guardian: 6 Month Ban - ${lastReason}` });
+      action = 'SIX_MONTH_BAN';
+    } else if (points >= 50 && perms.canBan) {
+      await member.ban({ reason: `Guardian: 1 Month Ban - ${lastReason}` });
+      action = 'ONE_MONTH_BAN';
+    } else if (points >= 35 && perms.canBan) {
+      await member.ban({ reason: `Guardian: 1 Week Ban - ${lastReason}` });
+      action = 'ONE_WEEK_BAN';
+    } 
+    // Timeout actions - require moderate members permission
+    else if (points >= 25 && perms.canTimeout) {
+      await member.timeout(14 * 24 * 60 * 60 * 1000, `Guardian: 2 Week Timeout - ${lastReason}`);
+      action = 'TWO_WEEK_TIMEOUT';
+      duration = '14 days';
+    } else if (points >= 20 && perms.canTimeout) {
+      await member.timeout(7 * 24 * 60 * 60 * 1000, `Guardian: 1 Week Timeout - ${lastReason}`);
+      action = 'ONE_WEEK_TIMEOUT';
+      duration = '7 days';
+    } else if (points >= 15 && perms.canTimeout) {
+      await member.timeout(3 * 24 * 60 * 60 * 1000, `Guardian: 3 Day Timeout - ${lastReason}`);
+      action = 'THREE_DAY_TIMEOUT';
+      duration = '3 days';
+    } else if (points >= 10 && perms.canTimeout) {
+      await member.timeout(24 * 60 * 60 * 1000, `Guardian: 24 Hour Timeout - ${lastReason}`);
+      action = 'DAY_TIMEOUT';
+      duration = '24 hours';
+    } else if (points >= 5 && perms.canTimeout) {
+      await member.timeout(60 * 60 * 1000, `Guardian: 1 Hour Timeout - ${lastReason}`);
+      action = 'HOUR_TIMEOUT';
+      duration = '1 hour';
     }
 
     if (action) {
-      await logAction(member.guild, {
+      await logToAllChannels(member.guild, {
         type: action,
         user: member.user,
         moderator: client.user,
@@ -385,20 +354,33 @@ async function punish(member, points, lastReason) {
         duration: duration,
         points: points
       });
+    } else {
+      // If we can't punish but points are high, log it
+      if (points >= 5) {
+        await logToAllChannels(member.guild, {
+          type: 'WARNING',
+          user: member.user,
+          moderator: client.user,
+          reason: `Cannot apply punishment - Missing permissions`,
+          details: {
+            points: points,
+            requiredAction: getActionFromPoints(points),
+            missingPermissions: getMissingPermissionsMessage(perms, points)
+          }
+        });
+      }
     }
   } catch (error) {
     console.error('Error in punish:', error);
     
-    // Log the error
-    await logAction(member.guild, {
+    await logToAllChannels(member.guild, {
       type: 'WARNING',
       user: member.user,
       moderator: client.user,
       reason: 'Failed to apply punishment',
       details: {
         error: error.message,
-        points: points,
-        attemptedAction: getActionFromPoints(points)
+        points: points
       }
     });
   }
@@ -417,76 +399,94 @@ function getActionFromPoints(points) {
   return 'NO_ACTION';
 }
 
-// ===== Logging Function =====
-async function logAction(guild, data) {
+function getMissingPermissionsMessage(perms, points) {
+  if (points >= 35) {
+    return !perms.canBan ? 'Need Ban Members permission' : 'Unknown';
+  } else if (points >= 5) {
+    return !perms.canTimeout ? 'Need Moderate Members permission' : 'Unknown';
+  }
+  return 'None';
+}
+
+// ===== Logging ke Multiple Channels =====
+async function logToAllChannels(guild, data) {
   try {
-    const channel = await guild.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
-    if (!channel) return;
+    for (const channelId of LOG_CHANNELS) {
+      const channel = await guild.channels.fetch(channelId).catch(() => null);
+      if (!channel) continue;
 
-    const embed = new EmbedBuilder()
-      .setTitle(`🛡️ Guardian Action: ${data.type}`)
-      .setColor(getColorForAction(data.type))
-      .setTimestamp()
-      .setFooter({ text: 'Guardian Security System' });
+      const embed = new EmbedBuilder()
+        .setTitle(`🛡️ Guardian Action: ${data.type}`)
+        .setColor(getColorForAction(data.type))
+        .setTimestamp()
+        .setFooter({ text: 'Guardian Security System' });
 
-    embed.addFields({ 
-      name: '👤 User', 
-      value: `${data.user.tag} (<@${data.user.id}>)`, 
-      inline: true 
-    });
-
-    if (data.moderator) {
+      // Add user info
       embed.addFields({ 
-        name: '🛡️ Moderator', 
-        value: `${data.moderator.tag}`, 
+        name: '👤 User', 
+        value: `${data.user.tag} (<@${data.user.id}>)`, 
         inline: true 
       });
-    }
 
-    embed.addFields({ 
-      name: '📝 Reason', 
-      value: data.reason || 'No reason provided', 
-      inline: false 
-    });
+      // Add moderator info
+      if (data.moderator) {
+        embed.addFields({ 
+          name: '🛡️ Moderator', 
+          value: `${data.moderator.tag}`, 
+          inline: true 
+        });
+      }
 
-    if (data.points) {
+      // Add reason
       embed.addFields({ 
-        name: '⚡ Points', 
-        value: `${data.points.toFixed(1)}`, 
-        inline: true 
-      });
-    }
-
-    if (data.totalPoints) {
-      embed.addFields({ 
-        name: '📊 Total Points', 
-        value: `${data.totalPoints.toFixed(1)}`, 
-        inline: true 
-      });
-    }
-
-    if (data.duration) {
-      embed.addFields({ 
-        name: '⏱️ Duration', 
-        value: data.duration, 
-        inline: true 
-      });
-    }
-
-    if (data.details && Object.keys(data.details).length > 0) {
-      const detailsStr = Object.entries(data.details)
-        .map(([k, v]) => `**${k}:** ${v}`)
-        .join('\n');
-      embed.addFields({ 
-        name: '📋 Additional Details', 
-        value: detailsStr.substring(0, 1000), 
+        name: '📝 Reason', 
+        value: data.reason || 'No reason provided', 
         inline: false 
       });
-    }
 
-    await channel.send({ embeds: [embed] });
+      // Add points if available
+      if (data.points) {
+        embed.addFields({ 
+          name: '⚡ Points', 
+          value: `${data.points.toFixed(1)}`, 
+          inline: true 
+        });
+      }
+
+      // Add total points if available
+      if (data.totalPoints) {
+        embed.addFields({ 
+          name: '📊 Total Points', 
+          value: `${data.totalPoints.toFixed(1)}`, 
+          inline: true 
+        });
+      }
+
+      // Add duration if available
+      if (data.duration) {
+        embed.addFields({ 
+          name: '⏱️ Duration', 
+          value: data.duration, 
+          inline: true 
+        });
+      }
+
+      // Add additional details
+      if (data.details && Object.keys(data.details).length > 0) {
+        const detailsStr = Object.entries(data.details)
+          .map(([k, v]) => `**${k}:** ${v}`)
+          .join('\n');
+        embed.addFields({ 
+          name: '📋 Additional Details', 
+          value: detailsStr.substring(0, 1000), 
+          inline: false 
+        });
+      }
+
+      await channel.send({ embeds: [embed] });
+    }
   } catch (error) {
-    console.error('Error logging action:', error);
+    console.error('Error logging to channels:', error);
   }
 }
 
@@ -691,7 +691,7 @@ client.on("guildMemberAdd", async member => {
         { upsert: true }
       );
 
-      await logAction(member.guild, {
+      await logToAllChannels(member.guild, {
         type: 'WARNING',
         user: member.user,
         moderator: client.user,
@@ -702,10 +702,12 @@ client.on("guildMemberAdd", async member => {
         }
       });
 
-      if (daysOld < 0.1 || username.match(/bot|spam|hack|nuke|raid/i)) {
+      const perms = canModerate(member.guild);
+      
+      if ((daysOld < 0.1 || username.match(/bot|spam|hack|nuke|raid/i)) && perms.canKick) {
         if (member.kickable) {
           await member.kick("Guardian: Extremely suspicious account").catch(() => {});
-          await logAction(member.guild, {
+          await logToAllChannels(member.guild, {
             type: 'KICK',
             user: member.user,
             moderator: client.user,
@@ -740,10 +742,12 @@ client.on("voiceStateUpdate", async (oldState, newState) => {
           guildId: newState.guild.id
         });
 
-        if (user && user.suspicious) {
+        const perms = canModerate(newState.guild);
+        
+        if (user && user.suspicious && perms.canTimeout) {
           if (member.moderatable) {
             await newState.disconnect("Guardian: Voice channel protection").catch(() => {});
-            await logAction(newState.guild, {
+            await logToAllChannels(newState.guild, {
               type: 'WARNING',
               user: member.user,
               moderator: client.user,
@@ -786,24 +790,26 @@ setInterval(async () => {
 // ===== Ready Event =====
 client.once('ready', () => {
   console.log(`Logged in as ${client.user.tag}`);
+  console.log(`📢 Log akan dikirim ke ${LOG_CHANNELS.length} channel:`);
+  LOG_CHANNELS.forEach((channelId, index) => {
+    console.log(`   Channel ${index + 1}: ${channelId}`);
+  });
   
-  // Log bot permissions
+  // Log bot permissions for all servers
   client.guilds.cache.forEach(guild => {
     const botMember = guild.members.me;
     if (botMember) {
-      const permissions = botMember.permissions.toArray();
-      console.log(`[${guild.name}] Bot permissions:`, permissions);
+      const perms = canModerate(guild);
       
-      // Check if bot has required permissions
-      const hasModerate = botMember.permissions.has(PermissionsBitField.Flags.ModerateMembers);
-      const hasBan = botMember.permissions.has(PermissionsBitField.Flags.BanMembers);
-      const hasKick = botMember.permissions.has(PermissionsBitField.Flags.KickMembers);
+      console.log(`\n📌 ${guild.name}:`);
+      console.log(`   Admin: ${perms.isAdmin ? '✅' : '❌'}`);
+      console.log(`   Kick Members: ${perms.canKick ? '✅' : '❌'}`);
+      console.log(`   Ban Members: ${perms.canBan ? '✅' : '❌'}`);
+      console.log(`   Moderate Members: ${perms.canTimeout ? '✅' : '❌'}`);
+      console.log(`   Manage Messages: ${perms.canDeleteMessages ? '✅' : '❌'}`);
       
-      if (!hasModerate || !hasBan || !hasKick) {
-        console.log(`⚠️  [${guild.name}] Bot missing moderation permissions!`);
-        console.log(`   Moderate Members: ${hasModerate ? '✅' : '❌'}`);
-        console.log(`   Ban Members: ${hasBan ? '✅' : '❌'}`);
-        console.log(`   Kick Members: ${hasKick ? '✅' : '❌'}`);
+      if (!perms.canKick || !perms.canBan || !perms.canTimeout) {
+        console.log(`   ⚠️  Bot missing moderation permissions in this server!`);
       }
     }
   });
