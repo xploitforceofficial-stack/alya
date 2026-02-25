@@ -1,0 +1,10 @@
+{
+  "name": "alya",
+  "version": "3.0.0",
+  "main": "index.js",
+  "dependencies": {
+    "discord.js": "^14.14.1",
+    "mongoose": "^8.0.0",
+    "dotenv": "^16.0.0"
+  }
+}
