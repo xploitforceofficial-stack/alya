@@ -1,4 +1,3 @@
-require("dotenv").config();
 const { Client, GatewayIntentBits, PermissionsBitField } = require("discord.js");
 const mongoose = require("mongoose");
 const config = require("./config");
@@ -21,22 +20,12 @@ mongoose.connect(process.env.MONGO_URI)
 // ===== Toxic Detection =====
 function containsToxic(content) {
   const patterns = [
-    // Indonesia
     /kontol|anjing|babi|ngentot|memek/i,
-
-    // English
     /fuck|bitch|asshole|motherfucker|nigger/i,
-
-    // Spanish
     /puta|mierda|pendejo/i,
-
-    // Arabic
     /كسم|شرموطة/i,
-
-    // Repeat char abuse
     /(.)\1{5,}/i
   ];
-
   return patterns.some(p => p.test(content));
 }
 
@@ -61,14 +50,12 @@ async function handleViolation(message, severity, reason) {
 
   const now = new Date();
 
-  // Multiplier logic
   if ((now - user.lastViolation) < 48 * 60 * 60 * 1000) {
     user.multiplier += 0.5;
   } else {
     user.multiplier = 1;
   }
 
-  // Suspicious multiplier
   if (user.suspicious) {
     severity *= 2;
   }
@@ -81,7 +68,7 @@ async function handleViolation(message, severity, reason) {
   await punish(message.member, user.points);
 }
 
-// ===== Punishment System =====
+// ===== Punishment =====
 async function punish(member, points) {
   if (!member) return;
 
@@ -116,7 +103,7 @@ client.on("messageCreate", async message => {
 
   const now = Date.now();
 
-  // ===== Spam Detection =====
+  // Spam
   user.messageTimestamps.push(now);
   user.messageTimestamps = user.messageTimestamps.filter(
     t => now - t < config.spamInterval
@@ -127,26 +114,26 @@ client.on("messageCreate", async message => {
     await handleViolation(message, 3, "Spam");
   }
 
-  // ===== Everyone Abuse =====
+  // Everyone abuse
   if ((message.content.includes("@everyone") || message.content.includes("@here")) &&
       !message.member.permissions.has(PermissionsBitField.Flags.MentionEveryone)) {
     await message.delete().catch(()=>{});
     await handleViolation(message, 7, "Everyone Abuse");
   }
 
-  // ===== Toxic =====
+  // Toxic
   if (containsToxic(message.content)) {
     await message.delete().catch(()=>{});
     await handleViolation(message, 5, "Toxic Language");
   }
 
-  // ===== Scam =====
+  // Scam
   if (containsScam(message.content)) {
     await message.delete().catch(()=>{});
     await handleViolation(message, 8, "Scam Link");
   }
 
-  // ===== Attachment Limit =====
+  // Attachment size
   if (message.attachments.size > 0) {
     message.attachments.forEach(att => {
       if (att.size > config.maxAttachmentMB * 1024 * 1024) {
@@ -159,7 +146,7 @@ client.on("messageCreate", async message => {
   await user.save();
 });
 
-// ===== Suspicious System (NO AUTO PUNISH) =====
+// ===== Suspicious System =====
 client.on("guildMemberAdd", async member => {
   const accountAge = Date.now() - member.user.createdTimestamp;
   const daysOld = accountAge / (1000 * 60 * 60 * 24);
@@ -171,7 +158,7 @@ client.on("guildMemberAdd", async member => {
       { upsert: true }
     );
 
-    console.log(`${member.user.tag} flagged as suspicious (new account)`);
+    console.log(`${member.user.tag} flagged as suspicious`);
   }
 });
 
